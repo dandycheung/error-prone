@@ -1994,7 +1994,7 @@ public final class StatementSwitchToExpressionSwitchTest {
                     default:
                       throw new NullPointerException();
                   }
-                  // Unreachable - no "should never happen" code
+                  // Trailing comment
                 }
                 System.out.println("don't delete 2");
                 return 0;
@@ -2023,6 +2023,7 @@ public final class StatementSwitchToExpressionSwitchTest {
                     case CLUB -> throw new NullPointerException();
                     default -> throw new NullPointerException();
                   };
+                  // Trailing comment
                 }
                 System.out.println("don't delete 2");
                 return 0;
@@ -2098,6 +2099,53 @@ public final class StatementSwitchToExpressionSwitchTest {
             "-XepOpt:StatementSwitchToExpressionSwitch:EnableReturnSwitchConversion",
             "-XepOpt:StatementSwitchToExpressionSwitch:EnableDirectConversion=false")
         .setFixChooser(FixChoosers.SECOND)
+        .doTest(TEXT_MATCH);
+  }
+
+  @Test
+  public void switchByEnum_returnSwitchWithAllEnumValues_retainTrailingLintComment() {
+    refactoringHelper
+        .addInputLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                // LINT.
+                switch (suit) {
+                  case HEART:
+                    return 1;
+                  case DIAMOND:
+                    return 2;
+                  case SPADE:
+                    return 3;
+                  case CLUB:
+                    return 4;
+                }
+                // LINT.
+                throw new AssertionError("unreachable!");
+              }
+            }
+            """)
+        .addOutputLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                // LINT.
+                return switch (suit) {
+                  case HEART -> 1;
+                  case DIAMOND -> 2;
+                  case SPADE -> 3;
+                  case CLUB -> 4;
+                };
+                // LINT.
+
+              }
+            }
+            """)
+        .setArgs(
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableReturnSwitchConversion",
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableDirectConversion=false")
         .doTest(TEXT_MATCH);
   }
 
