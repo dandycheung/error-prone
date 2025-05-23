@@ -1378,6 +1378,36 @@ public final class StatementSwitchToExpressionSwitchTest {
   }
 
   @Test
+  public void switchByEnum_firstNullCase_noError() {
+    // The null case cannot be grouped with a following regular case per Java syntax
+    assume().that(Runtime.version().feature()).isAtLeast(21);
+    helper
+        .addSourceLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                switch (suit) {
+                  case null:
+                  case DIAMOND:
+                    return 123;
+                  case SPADE:
+                    throw new RuntimeException("Spade");
+                  case HEART:
+                    throw new RuntimeException("Heart");
+                  case CLUB:
+                    throw new NullPointerException("Club");
+                }
+              }
+            }
+            """)
+        .setArgs(
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableReturnSwitchConversion",
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableDirectConversion=false")
+        .doTest();
+  }
+
+  @Test
   public void switchByEnum_nullGroupedWithDefault_error() {
     assume().that(Runtime.version().feature()).isAtLeast(21);
     // Null can be grouped with default
@@ -1994,7 +2024,7 @@ public final class StatementSwitchToExpressionSwitchTest {
                     default:
                       throw new NullPointerException();
                   }
-                  // Unreachable - no "should never happen" code
+                  // Trailing comment
                 }
                 System.out.println("don't delete 2");
                 return 0;
@@ -2023,6 +2053,7 @@ public final class StatementSwitchToExpressionSwitchTest {
                     case CLUB -> throw new NullPointerException();
                     default -> throw new NullPointerException();
                   };
+                  // Trailing comment
                 }
                 System.out.println("don't delete 2");
                 return 0;
@@ -2098,6 +2129,53 @@ public final class StatementSwitchToExpressionSwitchTest {
             "-XepOpt:StatementSwitchToExpressionSwitch:EnableReturnSwitchConversion",
             "-XepOpt:StatementSwitchToExpressionSwitch:EnableDirectConversion=false")
         .setFixChooser(FixChoosers.SECOND)
+        .doTest(TEXT_MATCH);
+  }
+
+  @Test
+  public void switchByEnum_returnSwitchWithAllEnumValues_retainTrailingLintComment() {
+    refactoringHelper
+        .addInputLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                // LINT.
+                switch (suit) {
+                  case HEART:
+                    return 1;
+                  case DIAMOND:
+                    return 2;
+                  case SPADE:
+                    return 3;
+                  case CLUB:
+                    return 4;
+                }
+                // LINT.
+                throw new AssertionError("unreachable!");
+              }
+            }
+            """)
+        .addOutputLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                // LINT.
+                return switch (suit) {
+                  case HEART -> 1;
+                  case DIAMOND -> 2;
+                  case SPADE -> 3;
+                  case CLUB -> 4;
+                };
+                // LINT.
+
+              }
+            }
+            """)
+        .setArgs(
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableReturnSwitchConversion",
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableDirectConversion=false")
         .doTest(TEXT_MATCH);
   }
 
@@ -2463,6 +2541,50 @@ public final class StatementSwitchToExpressionSwitchTest {
                   // Fall through
                   default:
                     throw new NullPointerException();
+                };
+              }
+            }
+            """)
+        .setArgs(
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableReturnSwitchConversion",
+            "-XepOpt:StatementSwitchToExpressionSwitch:EnableDirectConversion=false")
+        .doTest();
+  }
+
+  @Test
+  public void switchByEnumExhaustive_qualifiedCaseLabels() {
+    assume().that(Runtime.version().feature()).isAtLeast(21);
+
+    refactoringHelper
+        .addInputLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                switch (suit) {
+                  case Suit.HEART:
+                    return 1;
+                  case Suit.CLUB:
+                    return 2;
+                  case Suit.DIAMOND:
+                    return 3;
+                  case Suit.SPADE:
+                    return 4;
+                }
+                throw new AssertionError();
+              }
+            }
+            """)
+        .addOutputLines(
+            "Test.java",
+            """
+            class Test {
+              public int foo(Suit suit) {
+                return switch (suit) {
+                  case Suit.HEART -> 1;
+                  case Suit.CLUB -> 2;
+                  case Suit.DIAMOND -> 3;
+                  case Suit.SPADE -> 4;
                 };
               }
             }

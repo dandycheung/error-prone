@@ -41,7 +41,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Range;
 import com.google.common.collect.Streams;
 import com.google.errorprone.BugPattern;
 import com.google.errorprone.ErrorProneFlags;
@@ -299,6 +298,14 @@ public final class StatementSwitchToExpressionSwitch extends BugChecker
         return DEFAULT_ANALYSIS_RESULT;
       }
 
+      // Null case can never be grouped with a following case (except possibly default)
+      if (caseIndex > 0
+          && groupedWithNextCase.get(caseIndex - 1)
+          && isNullCase.get(caseIndex - 1)
+          && !isDefaultCase) {
+        return DEFAULT_ANALYSIS_RESULT;
+      }
+
       // Grouping null with default requires Java 21+
       if (caseIndex > 0
           && isNullCase.get(caseIndex - 1)
@@ -310,8 +317,9 @@ public final class StatementSwitchToExpressionSwitch extends BugChecker
       // Accumulate enum values included in this case
       handledEnumValues.addAll(
           caseTree.getExpressions().stream()
-              .filter(IdentifierTree.class::isInstance)
-              .map(expressionTree -> ((IdentifierTree) expressionTree).getName().toString())
+              .map(ASTHelpers::getSymbol)
+              .filter(x -> x != null)
+              .map(symbol -> symbol.getSimpleName().toString())
               .collect(toImmutableSet()));
       boolean isLastCaseInSwitch = caseIndex == cases.size() - 1;
 
@@ -1021,7 +1029,7 @@ public final class StatementSwitchToExpressionSwitch extends BugChecker
       AnalysisResult analysisResult,
       boolean removeDefault) {
 
-    List<Range<Integer>> regionsToDelete = new ArrayList<>();
+    SuggestedFix.Builder suggestedFixBuilder = SuggestedFix.builder();
     List<? extends CaseTree> cases = switchTree.getCases();
     ImmutableList<ErrorProneComment> allSwitchComments =
         state.getTokensForNode(switchTree).stream()
@@ -1119,12 +1127,12 @@ public final class StatementSwitchToExpressionSwitch extends BugChecker
       if (tree instanceof BlockTree blockTree) {
         TreePath rootToCurrentPath = TreePath.getPath(state.getPath(), switchTree);
         int indexInBlock = findBlockStatementIndex(rootToCurrentPath, blockTree);
+        var statements = blockTree.getStatements();
         // A single mock of the immediate child statement block (or switch) is sufficient to
         // analyze reachability here; deeper-nested statements are not relevant.
         boolean nextStatementReachable =
             Reachability.canCompleteNormally(
-                blockTree.getStatements().get(indexInBlock),
-                ImmutableMap.of(cannotCompleteNormallyTree, false));
+                statements.get(indexInBlock), ImmutableMap.of(cannotCompleteNormallyTree, false));
         // If we continue to the ancestor statement block, it will be because the end of this
         // statement block is not reachable
         cannotCompleteNormallyTree = blockTree;
@@ -1132,23 +1140,37 @@ public final class StatementSwitchToExpressionSwitch extends BugChecker
           break;
         }
 
-        // If the next statement is not reachable, then none of the following statements in this
-        // block are either.  So, we need to delete them all.
-        regionsToDelete.add(
-            Range.closed(
-                state.getEndPosition(blockTree.getStatements().get(indexInBlock)),
-                state.getEndPosition(blockTree)));
+        // If a next statement in this block exists, then it is not reachable.
+        if (indexInBlock < statements.size() - 1) {
+          String deletedRegion =
+              state
+                  .getSourceCode()
+                  .subSequence(
+                      state.getEndPosition(statements.get(indexInBlock)),
+                      state.getEndPosition(blockTree))
+                  .toString();
+          // If the region we would delete looks interesting, bail out and just delete the orphaned
+          // statements.
+          if (deletedRegion.contains("LINT.")) {
+            statements
+                .subList(indexInBlock + 1, statements.size())
+                .forEach(suggestedFixBuilder::delete);
+          } else {
+            // If the region doesn't seem to contain interesting comments, delete it along with
+            // comments: those comments are often just of the form "Unreachable code".
+            suggestedFixBuilder.replace(
+                state.getEndPosition(statements.get(indexInBlock)),
+                state.getEndPosition(blockTree),
+                "}");
+          }
+        }
       }
     }
 
-    SuggestedFix.Builder suggestedFixBuilder = SuggestedFix.builder();
     if (removeDefault) {
       suggestedFixBuilder.setShortDescription(REMOVE_DEFAULT_CASE_SHORT_DESCRIPTION);
     }
     suggestedFixBuilder.replace(switchTree, replacementCodeBuilder.toString());
-    // Delete dead code, leaving comments where feasible
-    regionsToDelete.forEach(
-        r -> suggestedFixBuilder.replace(r.lowerEndpoint(), r.upperEndpoint(), "}"));
     return suggestedFixBuilder.build();
   }
 
